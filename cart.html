@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FashionHub - Cart</title>
+    <!-- Tailwind CSS for utility classes -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="bg-gray-800 text-white p-4">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold">FashionHub</h1>
+            <ul class="flex space-x-4">
+                <li><a href="index.html" class="hover:text-gray-300">Home</a></li>
+                <li><a href="products.html" class="hover:text-gray-300">Products</a></li>
+                <li><a href="cart.html" class="hover:text-gray-300">Cart (<span id="cart-count">0</span>)</a></li>
+                <li><a href="account.html" class="hover:text-gray-300">Account</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <section class="container mx-auto py-12">
+        <h2 class="text-3xl font-bold text-center mb-8">Your Shopping Cart</h2>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Cart Items List (2/3 width) -->
+            <div id="cart-items" class="lg:col-span-2 space-y-4">
+                <!-- Cart items dynamically loaded here -->
+            </div>
+
+            <!-- Cart Summary (1/3 width) -->
+            <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg h-fit">
+                <h3 class="text-2xl font-bold mb-4 border-b pb-2">Order Summary</h3>
+                <p id="cart-total" class="text-xl font-extrabold mb-6">Total: $0.00</p>
+                <button id="checkout" class="w-full bg-green-600 text-white px-6 py-3 text-lg rounded-xl hover:bg-green-700 transition duration-300" disabled>
+                    Proceed to Checkout
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Link the JavaScript logic -->
+    <script src="app.js"></script>
+</body>
+</html>
+
