@@ -1,0 +1,6 @@
+Netlify will serve files from the root of your repository, so no publish directory needed if all files are in the root.
+​publish = "."
+​[context.production] is the default context for the live site
+​Example of a rewrite rule. If your Vercel backend URL was fixed (e.g., https://www.google.com/search?q=https://your-backend.vercel.app),
+​you might use a redirect, but for this project, the Vercel API is hosted separately.
+​This file is mainly here for best practices and future extensibility.
