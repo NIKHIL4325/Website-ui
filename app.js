@@ -1,111 +1,35 @@
-// --- Firebase Imports ---
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, setLogLevel, collection, doc, setDoc, deleteDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
 // --- Global Configuration ---
+// This endpoint assumes your Vercel function is deployed under /api/products
+// Note: When deployed on Netlify, you might need to ensure CORS is configured on your Vercel backend.
 const API_URL = '/api/products'; 
+const CART_STORAGE_KEY = 'fashionhub_cart';
 let allProducts = [];
 
-// --- Firebase Global State Variables ---
-let auth;
-let db;
-let userId = null;
-let isAuthReady = false;
-let currentCart = []; // The single source of truth for the cart data
-
-// Initialize Firebase App details
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// --- Firebase Cart Functions ---
+// --- Utility Functions (Local Storage for Cart) ---
 
 /**
- * Gets the document reference for the user's cart in Firestore.
- * Collection Path: /artifacts/{appId}/users/{userId}/cart
+ * Persists the cart state to the browser's local storage.
+ * @param {Array<Object>} cart - The current cart array.
  */
-const getCartDocRef = (uid) => {
-    return doc(db, 'artifacts', appId, 'users', uid, 'cart', 'items');
+const saveCart = (cart) => {
+    try {
+        localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+    } catch (e) {
+        console.error("Could not save cart to local storage:", e);
+    }
 };
 
 /**
- * Attaches a real-time listener to the user's cart in Firestore.
- * This replaces all client-side 'loadCart' logic.
+ * Loads the cart state from local storage.
+ * @returns {Array<Object>} The loaded cart array or an empty array.
  */
-const setupRealtimeCartListener = () => {
-    if (!isAuthReady || !userId || !db) {
-        console.warn("Cannot set up Firestore listener: Auth not ready or DB not initialized.");
-        return;
-    }
-
-    const cartDocRef = getCartDocRef(userId);
-
-    // onSnapshot provides real-time updates whenever the cart document changes
-    onSnapshot(cartDocRef, (docSnapshot) => {
-        if (docSnapshot.exists()) {
-            // Firestore stores the cart as a map of product IDs to item objects
-            const cartData = docSnapshot.data();
-            
-            // Convert the map data back into an array structure for easier UI rendering
-            currentCart = Object.keys(cartData).map(productId => cartData[productId]);
-            
-            console.log("Cart updated from Firestore:", currentCart);
-        } else {
-            currentCart = [];
-            console.log("Cart is empty (document does not exist).");
-        }
-        
-        // Always re-render the UI whenever the cart changes
-        updateCartCount();
-        // Only re-render cart page if we are on the cart page
-        if (window.location.pathname.endsWith('cart.html')) {
-            initCartPage();
-        }
-    }, (error) => {
-        console.error("Error setting up cart snapshot listener:", error);
-        showNotification('Failed to load real-time cart data.', 'error');
-    });
-};
-
-/**
- * Saves the entire cart structure (or a specific item change) back to Firestore.
- * @param {Array<Object>} cartItems - The new array of cart items.
- */
-const saveCartToFirestore = async (cartItems) => {
-    if (!isAuthReady || !userId || !db) {
-        showNotification('Cannot save cart: User not authenticated.', 'error');
-        return;
-    }
-
-    const cartDocRef = getCartDocRef(userId);
-    const cartData = {};
-
-    if (cartItems.length > 0) {
-        // Convert array back into a key-value map for storage consistency
-        cartItems.forEach(item => {
-            cartData[item.id] = item;
-        });
-        
-        try {
-            // Use setDoc to overwrite or create the document
-            await setDoc(cartDocRef, cartData);
-        } catch (error) {
-            console.error("Error writing cart to Firestore:", error);
-            showNotification('Failed to save cart. Please try again.', 'error');
-        }
-    } else {
-        // If the cart is empty, delete the document to keep the database clean
-        try {
-            // Check if the document exists before trying to delete
-            const docSnap = await getDoc(cartDocRef);
-            if (docSnap.exists()) {
-                await deleteDoc(cartDocRef);
-                console.log("Empty cart deleted from Firestore.");
-            }
-        } catch (error) {
-            console.error("Error deleting empty cart document:", error);
-        }
+const loadCart = () => {
+    try {
+        const cartJson = localStorage.getItem(CART_STORAGE_KEY);
+        return cartJson ? JSON.parse(cartJson) : [];
+    } catch (e) {
+        console.error("Could not load cart from local storage:", e);
+        return [];
     }
 };
 
@@ -113,32 +37,22 @@ const saveCartToFirestore = async (cartItems) => {
  * Updates the cart item count displayed in the navigation.
  */
 const updateCartCount = () => {
-    // Current cart is now taken from the global currentCart array
-    const totalItems = currentCart.reduce((sum, item) => sum + item.quantity, 0);
+    const cart = loadCart();
+    // Calculate total quantity of items in the cart
+    const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
     const cartCountElement = document.getElementById('cart-count');
     if (cartCountElement) {
         cartCountElement.textContent = totalItems;
     }
-    
-    // Update the Account link to show the User ID
-    const accountLink = document.querySelector('a[href="account.html"]');
-    if (accountLink && userId) {
-        accountLink.title = `User ID: ${userId}`;
-        accountLink.textContent = `Account (${userId.substring(0, 4)}...)`;
-    }
-    
-    // Show user ID on the Account Page
-    if (window.location.pathname.endsWith('account.html')) {
-        const userIdDisplay = document.getElementById('user-id-display');
-        if (userIdDisplay) {
-            userIdDisplay.textContent = userId;
-        }
-    }
 };
 
-// --- Product Data Fetching (Unchanged) ---
+// --- Product Data Fetching ---
 
+/**
+ * Fetches product data from the Vercel Serverless Function.
+ */
 const fetchProducts = async () => {
+    // Fallback data in case the API call fails
     const fallbackProducts = [
         { id: 1, name: 'Minimalist T-Shirt', price: 24.99, image: 'https://placehold.co/300x200/4c66ff/ffffff?text=T-Shirt', description: 'Soft organic cotton, perfect for layering.', featured: true },
         { id: 2, name: 'Classic Denim Jacket', price: 79.99, image: 'https://placehold.co/300x200/5c7b94/ffffff?text=Jacket', description: 'A timeless staple for every wardrobe.', featured: true },
@@ -148,6 +62,7 @@ const fetchProducts = async () => {
     ];
 
     try {
+        // Fetch data from the deployed Vercel backend
         const response = await fetch(API_URL);
         if (!response.ok) {
             console.warn(`API call to ${API_URL} failed (Status: ${response.status}). Using local fallback data.`);
@@ -161,8 +76,11 @@ const fetchProducts = async () => {
     }
 };
 
-// --- Rendering Functions (Unchanged) ---
+// --- Rendering Functions ---
 
+/**
+ * Creates the HTML for a single product card.
+ */
 const renderProductCard = (product) => {
     return `
         <div class="product-card">
@@ -176,84 +94,83 @@ const renderProductCard = (product) => {
     `;
 };
 
+/**
+ * Renders products to a specific container and attaches 'Add to Cart' listeners.
+ */
 const renderProducts = (productsToRender, containerId) => {
     const container = document.getElementById(containerId);
     if (container) {
         container.innerHTML = productsToRender.map(renderProductCard).join('');
         
+        // Attach event listeners for Add to Cart buttons
         container.querySelectorAll('.add-to-cart-btn').forEach(button => {
             button.addEventListener('click', handleAddToCart);
         });
     }
 };
 
-// --- Cart Handlers (Updated for Firestore) ---
+// --- Cart Handlers ---
 
 /**
- * Handles adding a product to the cart by updating the Firestore document.
+ * Handles adding a product to the cart.
  */
-const handleAddToCart = async (event) => {
+const handleAddToCart = (event) => {
     const productId = parseInt(event.currentTarget.dataset.productId);
     const product = allProducts.find(p => p.id === productId);
 
     if (!product) return;
-    if (!isAuthReady) {
-        showNotification('Please wait for the user session to load before adding items.', 'info');
-        return;
-    }
 
-    let updatedCart = [...currentCart];
-    const existingItemIndex = updatedCart.findIndex(item => item.id === productId);
+    let cart = loadCart();
+    const existingItemIndex = cart.findIndex(item => item.id === productId);
 
     if (existingItemIndex !== -1) {
         // Increment quantity if product exists
-        updatedCart[existingItemIndex].quantity += 1;
+        cart[existingItemIndex].quantity += 1;
     } else {
         // Add new product to cart
-        updatedCart.push({ 
-            id: product.id, 
-            name: product.name, 
-            price: product.price, 
-            image: product.image, 
-            quantity: 1 
-        });
+        cart.push({ ...product, quantity: 1 });
     }
 
-    await saveCartToFirestore(updatedCart);
+    saveCart(cart);
+    updateCartCount();
+    
     showNotification(`${product.name} added to cart!`, 'success'); 
 };
 
 /**
- * Handles removing a product from the cart by updating the Firestore document.
+ * Handles removing a product from the cart.
  */
-const handleRemoveFromCart = async (event) => {
+const handleRemoveFromCart = (event) => {
     const productId = parseInt(event.currentTarget.dataset.productId);
+    let cart = loadCart();
     
     // Filter out the item with the matching ID
-    let updatedCart = currentCart.filter(item => item.id !== productId);
+    cart = cart.filter(item => item.id !== productId);
 
-    await saveCartToFirestore(updatedCart);
+    saveCart(cart);
+    updateCartCount();
+    initCartPage(); // Re-render cart content to reflect changes
     showNotification('Item removed from cart.', 'info');
 };
 
-const handleCheckout = async () => {
-    showNotification('Processing checkout...', 'info');
-
-    // In a real application, this would save the order details to a 'orders' collection.
-    // For this example, we simply clear the cart.
-    await saveCartToFirestore([]); // Clear cart in Firestore
-
-    showNotification('Checkout successful! Cart cleared.', 'success');
+const handleCheckout = () => {
+    // In a real application, this would trigger a payment gateway and API call.
+    showNotification('Checkout successful! Thank you for your order. We will process your items shortly.', 'success');
+    saveCart([]); // Clear cart
+    updateCartCount();
+    initCartPage(); // Re-render cart (which will now show 'Your cart is empty')
 };
 
-// --- Page Initialization Logic (Updated) ---
+// --- Page Initialization Logic ---
 
 const initHomePage = () => {
+    // Home page shows the first 3 featured products
     const featuredProducts = allProducts.filter(p => p.featured).slice(0, 3);
     renderProducts(featuredProducts, 'featured-products');
 };
 
 const initProductsPage = () => {
+    // Products page shows all items
     renderProducts(allProducts, 'product-list');
 };
 
@@ -263,15 +180,24 @@ const initProductDetailsPage = () => {
     const product = allProducts.find(p => p.id === productId);
 
     if (!product) {
-        document.querySelector('section.container').innerHTML = '<p class="text-center text-xl text-red-500">Product Not Found.</p>';
+        // Handle case where product is not found
+        document.querySelector('section.container').innerHTML = `
+            <div class="text-center p-10 bg-white rounded-xl shadow-lg">
+                <p class="text-3xl text-red-500 font-bold mb-4">404 - Product Not Found</p>
+                <p class="text-gray-600">The item you are looking for does not exist.</p>
+                <a href="products.html" class="mt-4 inline-block text-blue-600 hover:underline">Return to Products</a>
+            </div>
+        `;
         return;
     }
     
+    // Populate details from the fetched product
     document.getElementById('product-image').src = product.image;
     document.getElementById('product-name').textContent = product.name;
     document.getElementById('product-price').textContent = `$${product.price.toFixed(2)}`;
     document.getElementById('product-description').textContent = product.description;
     
+    // Attach 'Add to Cart' listener
     const addToCartButton = document.getElementById('add-to-cart');
     if (addToCartButton) {
         addToCartButton.dataset.productId = productId;
@@ -283,9 +209,7 @@ const initCartPage = () => {
     const cartItemsContainer = document.getElementById('cart-items');
     const cartTotalElement = document.getElementById('cart-total');
     const checkoutButton = document.getElementById('checkout');
-    
-    // Cart data now comes from the global currentCart, updated by onSnapshot
-    const cart = currentCart; 
+    const cart = loadCart();
 
     if (!cartItemsContainer || !cartTotalElement) return;
 
@@ -319,42 +243,37 @@ const initCartPage = () => {
     cartItemsContainer.innerHTML = cartHtml;
     cartTotalElement.textContent = `Total: $${total.toFixed(2)}`;
 
+    // Attach 'Remove' button listeners
     cartItemsContainer.querySelectorAll('.remove-from-cart-btn').forEach(button => {
         button.addEventListener('click', handleRemoveFromCart);
     });
     
+    // Attach 'Checkout' button listener only once
     if (checkoutButton && !checkoutButton.hasAttribute('data-listener-attached')) {
         checkoutButton.addEventListener('click', handleCheckout);
         checkoutButton.setAttribute('data-listener-attached', 'true');
     }
 };
 
-const initAccountPage = () => {
-    // We need to slightly update account.html to show the User ID, which is critical for debugging
-    const accountContent = document.querySelector('.max-w-md.mx-auto');
-    if (accountContent && userId) {
-        const userIdHtml = `<div class="mb-6 p-4 bg-gray-100 rounded-lg">
-            <h4 class="text-sm font-semibold text-gray-600 mb-1">Your Unique User ID</h4>
-            <p id="user-id-display" class="text-xs break-all font-mono text-gray-800">${userId}</p>
-            <p class="text-xs text-gray-500 mt-2">Use this ID to find your data in Firestore.</p>
-        </div>`;
-        accountContent.insertAdjacentHTML('afterbegin', userIdHtml);
-    }
-}
+// --- Custom Notification (Replaces alert()) ---
 
-// --- Custom Notification (Unchanged) ---
-
+/**
+ * Shows a custom notification message.
+ */
 function showNotification(message, type = 'info') {
     const color = type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600';
     
     const notification = document.createElement('div');
+    // Mobile-friendly: fixed position, slight padding
     notification.className = `fixed bottom-5 right-5 p-4 rounded-xl shadow-xl text-white max-w-xs transition-opacity duration-300 opacity-0 z-50 ${color}`;
     notification.textContent = message;
     
     document.body.appendChild(notification);
     
+    // Fade in
     setTimeout(() => { notification.classList.remove('opacity-0'); }, 10);
 
+    // Fade out and remove
     setTimeout(() => {
         notification.classList.add('opacity-0');
         setTimeout(() => notification.remove(), 300);
@@ -364,56 +283,13 @@ function showNotification(message, type = 'info') {
 // --- Main Application Entry Point ---
 
 const initializeApp = async () => {
-    // 1. Initialize Firebase and Auth
-    if (firebaseConfig) {
-        const app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-        db = getFirestore(app);
-        setLogLevel('Debug'); 
-
-        try {
-            if (initialAuthToken) {
-                await signInWithCustomToken(auth, initialAuthToken);
-            } else {
-                await signInAnonymously(auth);
-            }
-        } catch (error) {
-            console.error("Firebase Auth Error:", error);
-            showNotification(`Authentication Failed: ${error.message}`, 'error');
-        }
-        
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                userId = user.uid;
-                isAuthReady = true;
-                console.log(`User Authenticated. UID: ${userId}. Firebase initialized.`);
-                
-                // CRITICAL: Setup real-time cart listener immediately after auth
-                setupRealtimeCartListener();
-
-                // Fetch products (non-real-time data)
-                await fetchProducts(); 
-                
-                // Initialize UI elements (Account page relies on userId)
-                initPageLogic(); 
-
-            } else {
-                userId = crypto.randomUUID(); 
-                isAuthReady = false;
-                console.warn("User not authenticated. Using random ID:", userId);
-                
-                await fetchProducts(); 
-                initPageLogic();
-            }
-        });
-    } else {
-        console.warn("Firebase config not found. Running in local mode.");
-        await fetchProducts();
-        initPageLogic();
-    }
-};
-
-const initPageLogic = () => {
+    // 1. Fetch product data (independent of auth/persistence)
+    await fetchProducts(); 
+    
+    // 2. Ensure cart count is updated immediately
+    updateCartCount();
+    
+    // 3. Initialize page-specific logic
     const pathname = window.location.pathname;
     
     if (pathname.endsWith('index.html') || pathname === '/') {
@@ -424,9 +300,9 @@ const initPageLogic = () => {
         initCartPage();
     } else if (pathname.endsWith('product-details.html')) {
         initProductDetailsPage();
-    } else if (pathname.endsWith('account.html')) {
-        initAccountPage();
-    }
+    } 
 };
 
+
+// Start the application when the window is fully loaded
 window.addEventListener('load', initializeApp);
